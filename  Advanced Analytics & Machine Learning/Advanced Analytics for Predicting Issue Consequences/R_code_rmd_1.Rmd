@@ -1,0 +1,673 @@
+---
+title: "Advance Analytics Assignment_1"
+author: "Dhanush Mathighatta Shobhan Babu (40412492)"
+date: "\today"
+output:
+  html_document:
+    df_print: paged
+documentclass: article
+fontsize: 10
+papersize: a4paper
+header-includes:
+- \newcommand{\logo}{`r gsub("_", "\\_", params$logo)`}
+- \newcommand{\cover}{`r gsub("_", "\\_", params$cover)`}
+- \newcommand{\iblue}{`r params$iblue`}
+- \newcommand{\igray}{`r params$igray`}
+include-before:
+- \renewcommand{\contentsname}{Inhaltsverzeichnis}
+- \renewcommand{\pagename}{Seite}
+params:
+  logo: logo.png
+  cover: cover.png
+  iblue: 2b4894
+  igray: d4dbde
+---
+
+# Load the libraries
+```{r setup, include = FALSE}
+# packages
+library(dplyr)
+library(knitr)
+library(xtable)
+library(tidyverse)
+library(glmnet)
+library(caTools)
+library(MASS)
+library(car)
+library(dplyr)
+library(pROC)
+library(kableExtra)
+library(caret)
+library(ggplot2)
+library(viridis)
+
+# settings
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+#/dataset loading 
+### Loading the data set
+```{r Loading the data}
+data <- read_csv('/Users/dhanush/Desktop/Bussiness analytics /Sem 2/Adv Analytics /output_40412492.csv' )
+print("DATA LOADED!")
+
+```
+
+#Writing the train test function 
+Dividing the dataset into a train-test split with a ratio of 70-30.The seed value 40412492 was assigned to ensure reproducibility. 
+```{r creating the train_test_Split function}
+split_fun <- function(sub){
+  set.seed(40412492)
+  
+  # Generate random indices for splitting
+  split_indices <- sample(nrow(sub), size = floor(0.7 * nrow(sub)), replace = FALSE)
+  
+  # Split data based on indices
+  train <- sub[split_indices, ]
+  test <- sub[-split_indices, ]
+  
+  ### Splitting the train-test data into x_train, y_train, x_test, and y_test.
+  x_train <- model.matrix(Issue_Consequence_new ~ . - 1, data = train)
+  y_train <- ifelse(train$Issue_Consequence_new == "Non_Malfunction", 1, 0)
+  
+  x_test <- model.matrix(Issue_Consequence_new ~ . - 1, data = test)
+  y_test <- ifelse(test$Issue_Consequence_new == "Non_Malfunction",1,0)
+  
+  train$Issue_Consequence_new <- as.factor(ifelse(train$Issue_Consequence_new == "Non_Malfunction", 1, 0))
+  test$Issue_Consequence_new <- as.factor(ifelse(test$Issue_Consequence_new == "Non_Malfunction", 1, 0))
+  
+  return(list(X_train = x_train, y_train = y_train, x_test = x_test, y_test = y_test, train = train, test = test)) 
+}
+```
+
+### Lasso Regression Function Code.
+```{r lasso Regression Model Function}
+lasso_function <- function(x_train, y_train, x_test, y_test, subsets){
+  
+  grid = 10^seq(10, -2, length = 100)
+  cvmodel_A01 <-  cv.glmnet(x_train, y_train, alpha = 1 , family = "binomial", type.measure = "deviance", nfolds = 10)
+  
+  plot_cvmodel <- plot(cvmodel_A01)
+  plot_cvmodel
+  
+  best_lambda <- cvmodel_A01$lambda.min
+  best_lambda
+  
+  # fitting lasso model on train set
+  set.seed(40412492)
+  lasso.mod <- glmnet(x_train, y_train,family="binomial",type.measure = "deviance", alpha=1, lambda=grid)
+  plot(lasso.mod, label=TRUE)
+  plot(lasso.mod, xvar="lambda", label=TRUE, lwd=6)
+  
+  plot_lasso.mod <- plot(lasso.mod)
+  plot_lasso.mod
+  
+  set.seed(40412492)
+  lasso.pred <- predict(lasso.mod,family="binomial", s = best_lambda, newx = x_test)
+  pred_class <- ifelse(lasso.pred >= 0.5, 1, 0)
+  
+  
+  accuracy <- mean(pred_class == as.numeric(y_test))
+  accuracy
+  
+  set.seed(40412492)
+  X <- subsets %>% dplyr::select(-c(Issue_Consequence_new))
+  y <- subsets$Issue_Consequence_new
+  
+  
+  out = glmnet(X, y, alpha=1, family="binomial", type.measure = "deviance", lambda = grid)
+  out
+  
+  set.seed(40412492)
+  lasso.coef <-  predict(out, type="coefficients", s=best_lambda)[1:76,]
+  lc <- lasso.coef[lasso.coef!=0]
+  
+  lc_df <- data.frame(variable = names(lc)[-1], coefficient = lc[-1])
+  print(lc_df)
+  
+  top10 <- head(lc_df[order(abs(lc_df$coefficient), decreasing = TRUE), ], 10)
+  top10
+  
+  plot_top_10 <- ggplot(lc_df, aes(x = variable, y = coefficient)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    theme(axis.text.x = element_text(size=6, angle = 90, vjust = 0.5, hjust=1)) +
+    xlab("Variable") + ylab("Coefficient")
+    
+  plot_top_10
+  
+  return(list(plot_cvmodel= plot_cvmodel,best_lambda = best_lambda,plot_lasso.mod =plot_lasso.mod,accuracy = accuracy,top10 = top10,plot_top_10 =  plot_top_10,lc_df = lc_df))
+
+}
+
+```
+
+### Logistic Regression Code.
+```{r Logistic Regression function}
+
+logistic_Regression <- function(formula,train, test, y_test){
+  
+    glm.fits <- glm(formula, data = train, family = "binomial")
+    summary(glm.fits)
+    
+    # prediction on test dataset using trained model
+    predictions <- predict.glm(glm.fits, test,family = "binomial", type="response") 
+    
+    # changing numeric values of predictions into factor ;> 0.5 as 1 and <0.5 as 0
+    class_predict <- as.factor(ifelse(predictions > 0.5, 1, 0))  
+    class_predict
+    
+    accuracy_logistic_regression <- mean(class_predict == y_test)
+    cat("The Accuracy of the Logistic Regression is : ", accuracy_logistic_regression * 100)
+   
+    # Analysing the residuals
+    # Examining the influential cases
+    # Examining Multicollinearity
+    
+    outcome_lr <- postResample(class_predict, as.factor(y_test)) 
+    acc_lr <- outcome_lr["Accuracy"]
+    acc_lr
+    
+    # Confusion Matrix - to check True/false positive/negatives]
+    cm_lr <- confusionMatrix(data=class_predict, as.factor(y_test))  
+    cm_lr  
+   
+    
+    # Plot of confusion matrix
+    confusion_mat <- plot(cm_lr$table, col = c("white", "blue"), 
+         main = paste("Confusion Matrix\n Logistic Regression"))
+    
+    confusion_mat
+    
+    
+    # extracting coeficients of LR model
+    coef_summary <- summary(glm.fits)$coef
+    kable(coef_summary, caption = "Logistic Regression Coefficients", 
+          align = "c", booktabs = TRUE)
+    
+    
+    # ROC Curve
+    roc_lr <- roc(response = as.numeric(y_test), predictor = as.numeric(class_predict))
+    plot(roc_lr, main = "ROC Curve of LR", col = "blue", print.auc = TRUE, legacy.axes = TRUE)
+    
+    
+    return(list(glm.fits = glm.fits,acc_lr = acc_lr, cm_lr= cm_lr, confusion_mat = confusion_mat ))
+    
+}
+
+```
+
+
+
+### K fold for logistic Regression. 
+```{r kfold for logistic Regression}
+# K-fold value here is 10
+trControl <- trainControl(method  = "cv",number = 10)
+
+# fitting LR with different k values 1:10
+kfold_lr <- function(data, formula){
+  fit_lr <- train(formula,
+             method     = "glm",
+             trControl  = trControl,
+             data       =  data,
+             metric = "Accuracy")
+  return(fit_lr$results) 
+} 
+```
+
+### results visualisation
+```{r results visualisation}
+
+results_visual <- function(subsets){
+  
+  # Data frame with accuracy values
+  accuracy_df_lda <- data.frame(
+    Subset = c("Subset 1", "Subset 2", "Subset 3"),
+    Accuracy = c(subsets[1], subsets[2], subsets[3])
+  )
+  
+  # Calculate mean accuracy
+  mean_accuracy <- mean(accuracy_df_lda$Accuracy)
+  
+  # Create ggplot
+  ggplot(accuracy_df_lda, aes(x = Subset, y = Accuracy, label = paste0(round(Accuracy, 2), "%"))) +
+    geom_bar(stat = "identity", fill = "skyblue") +
+    geom_text(size = 3, position = position_stack(vjust = 0.5)) +
+    geom_hline(yintercept = mean_accuracy, linetype = "dashed", color = "red") +
+    annotate("text", x = 0.5, y = mean_accuracy, label = paste("Mean Accuracy:", round(mean_accuracy, 2), "%"), 
+             color = "red", hjust = -0.2, vjust = -0.5, size = 3) +
+    labs(title = "Logistic Regression Accuracy by Subset",
+         x = "Subset",
+         y = "Accuracy") +
+    theme_minimal()
+}
+
+
+```
+
+# 1.0 Introduction
+\section{1.0 Introduction}
+
+This analysis involves a thorough investigation of a dataset to forecast the "Issue Consequence" variable, utilising the CRISP-DM framework as our reference. The study commences with an initial examination of the data, known as exploratory data analysis (EDA), during which we reveal the characteristics and distribution patterns of the dataset.
+
+After that, we will concentrate on building models, specifically utilising Lasso Regression to identify the 10 most significant variables that impact our objective variable. Using these essential elements, we subsequently construct logistic regression and K-Nearest Neighbours (KNN) models to further evaluate their ability to make accurate predictions.
+
+During the model evaluation stage, we conduct a comprehensive analysis of each model's performance, utilising a range of metrics to gain a complete understanding of their effectiveness. The purpose of this thorough assessment is to produce valuable insights and recommendations that can assist in decision-making.
+
+By utilising the CRISP-DM framework, our investigation adheres to a systematic and structured approach, guaranteeing the dependability and accuracy of our discoveries. Utilising this systematic methodology facilitates the process of generating educated business decisions and improves our understanding of the intricacies and interconnections within the information.
+
+```{r}
+library(psych)
+
+describe(data)
+summary(data)
+names(data)
+```
+
+\section{2.0 Methodology}
+# 2.0 Methodology
+CRISP-DM is a process model for data mining that is not specific to any particular business. This method consists of six iterative steps, starting from business knowledge and ending with deployment (Schröer et al., 2021). 
+
+1.Business Understanding:This foundational step involves defining the project's objectives and requirements from a business perspective, then translating these into a data analytics project plan to ensure alignment with business goals.
+
+2.Data Understanding:Analysts collect and explore the data to familiarize themselves with its properties, uncover preliminary insights, and identify potential quality issues, setting the stage for informed data preparation and modeling.
+
+3.Data Preparation: In this critical step, raw data is cleaned, transformed, and structured into a final dataset ready for analysis, involving tasks like selecting relevant data, dealing with missing values, and creating new variables as needed.
+
+4.Modeling: Various statistical, machine learning, or other data modeling techniques are applied to the prepared data to develop models that can predict or classify according to the project's objectives, requiring the right model selection and validation methods.
+
+5.Evaluation: Models are rigorously evaluated against business objectives and criteria defined in the first step to ensure they meet the desired outcomes and provide actionable insights, leading to a decision on the model's business relevance and readiness for deployment.
+
+6.Deployment: The final models and insights are integrated into business operations, either as reports for decision-making or as automated systems, with plans for ongoing monitoring and maintenance to ensure continued relevance and accuracy over time.
+
+\subsection{2.1 Data Understanding}
+## 2.1 Data Understanding
+Data Understanding: This step in the CRISP-DM process involves forming hypotheses about the information held within the data based on experience and informed assumptions. For instance, in a predictive maintenance scenario, this could involve looking for new patterns in sensor data streams that may indicate machine component deterioration (Huber et al., 2019). The Data Understanding phase encourages the identification of data quality issues and the exploration of dataset characteristics to shape subsequent data preparation and analysis.
+
+Importance of Data Understanding: Understanding the data is essential because it sets the stage for all subsequent phases in the data mining process, impacting the quality of insights and the value derived from data analytics. This phase informs the quality and appropriateness of data for the task, ensuring that the data collected is relevant and sufficient to meet the business objectives (Huber et al., 2019). Without a thorough Data Understanding, the risk of drawing incorrect conclusions increases, potentially leading to ineffective or counterproductive decisions based on the analytical outcomes.
+
+```{r}
+SmartEDA::ExpData(data = data)
+```
+
+The dataset contains 56,760 observations and 77 variables, with 72 numeric or integer variables, four text variables, and one date variable. There are no factor, logical, or identifier variables present. All variables have complete cases, indicating there are no missing values within the dataset. There are also no zero variance variables, signifying diversity in the data.
+
+\subsection{2.2 Feature Engineering}
+## 2.2 Feature Engineering
+Feature engineering is the process of transforming and manipulating data to represent the underlying problem that a machine learning algorithm is trying to anticipate. This is done in order to minimise complexities and biases present in the data.
+
+### 2.2.1 Balancing the target variable.
+The transformation criteria applied designate the outcomes "Death", "Other", "No answer provided", and "Malfunction" from the original variable to "Malfunction" in the new variable. Any outcomes not explicitly matching these criteria are classified as "Non_Malfunction". This binary classification facilitates a simplified analytical approach to the consequences associated with the issues of the product.
+```{r Before Balancing the target variable}
+
+target_before_bal <- table(data$Proudct.issue.consequence)
+# Barplot of imbalanced target variable.
+barplot(target_before_bal)
+
+# Creating the new column name Issue_consequence_new.
+data <- data %>% mutate(Issue_Consequence_new = case_when(
+  Proudct.issue.consequence == "Death" ~ "Malfunction",
+   Proudct.issue.consequence == "Other" ~ "Malfunction",
+   Proudct.issue.consequence == "No answer provided" ~ "Malfunction",
+  Proudct.issue.consequence == "Malfunction" ~ "Malfunction",
+  TRUE ~ "Non_Malfunction")
+  )
+
+
+target_after_bal <- table(data$Issue_Consequence_new)
+# Barplot of balanced target variable.
+barplot(target_after_bal, col = c("red","black"))
+
+```
+### 2.2.2 EDA 
+```{r}
+# Load the ggplot2 library for plotting
+library(ggplot2)
+
+# Plot 1: Distribution of Issue Consequences
+# This bar plot shows the frequency of each issue consequence, providing insight into the most common problems.
+ggplot(data, aes(x = Issue_Consequence_new)) + 
+  geom_bar(fill = "cornflowerblue") + 
+  labs(title = "Distribution of Issue Consequences", x = "Issue Consequence", y = "Frequency") +
+  theme_minimal()
+
+# Plot 2: Product Quantity Averages by Issue Consequence
+# This boxplot compares the average product quantities across different issue consequences, identifying outliers.
+ggplot(data, aes(x = Issue_Consequence_new, y = last_year_product_quantity_average_average)) + 
+  geom_boxplot() +
+  labs(title = "Product Quantity Averages by Issue Consequence", x = "Issue Consequence", y = "Average Quantity") +
+  theme_minimal()
+
+# Plot 3: Distribution of Last Year's Unique Product Codes
+# Histogram showing the distribution of unique product codes reported last year to see which codes are more prevalent.
+ggplot(data, aes(x = last_year_all_product_codes_num_uniq)) + 
+  geom_histogram(fill = "lightblue", bins = 30) +
+  labs(title = "Distribution of Last Year's Unique Product Codes", x = "Number of Unique Product Codes", y = "Frequency") +
+  theme_minimal()
+
+# Plot 4: Density of Legal Announcing Firms by Issue Consequence
+# The density plot visualizes the variation in the number of unique legal announcing firms across issue consequences.
+ggplot(data, aes(x = last_year_legal_announcementing_firm_num_uniq, fill = Issue_Consequence_new)) + 
+  geom_density(alpha = 0.5) +
+  labs(title = "Density of Legal Announcing Firms by Issue Consequence", x = "Number of Firms", y = "Density") +
+  theme_minimal()
+
+# Plot 5: Reporter Job Codes by Issue Consequence
+# A bar plot showing the distribution of reporter job codes for different issue consequences, indicating reporting trends.
+ggplot(data, aes(x = reporter_job_code, fill = Issue_Consequence_new)) + 
+  geom_bar(position = "dodge") +
+  labs(title = "Reporter Job Codes by Issue Consequence", x = "Reporter Job Code", y = "Count") +
+  theme_minimal()
+
+# Plot 6: Max vs. Average Product Quantities by Issue Consequence
+# Scatter plot to examine the relationship between max and average product quantities, colored by issue consequence.
+ggplot(data, aes(x = last_year_product_quantity_average_max, y = last_year_product_quantity_average_average, color = Issue_Consequence_new)) + 
+  geom_point() +
+  labs(title = "Max vs. Average Product Quantities by Issue Consequence", x = "Max Quantity", y = "Average Quantity") +
+  theme_minimal()
+
+
+# Plot 7: Brand Name Frequencies by Issue Consequence
+# Bar plot to show how frequently each brand name appears within each issue consequence category.
+ggplot(data, aes(x = product.brand_name, fill = Issue_Consequence_new)) + 
+  geom_bar(position = "dodge") +
+  labs(title = "Brand Name Frequencies by Issue Consequence", x = "Brand Name", y = "Frequency") +
+  theme_minimal()
+
+# Plot 8: Trends of Legal Announcements Over Time
+# Line plot to track the trend of legal announcements over time, highlighting fluctuations and patterns.
+ggplot(data, aes(x = date_event, y = last_year_legal_announcementing_firm_num_uniq, group = Issue_Consequence_new, color = Issue_Consequence_new)) + 
+  geom_line() +
+  labs(title = "Trend of Legal Announcements Over Time", x = "Date", y = "Number of Legal Announcements") +
+  theme_minimal()
+
+# Plot 9: State-wise Manufacturer Distribution by Issue Consequence
+# This bar plot examines the distribution of manufacturers across states, broken down by issue consequence.
+ggplot(data, aes(x = product.manufacturer_state, fill = Issue_Consequence_new)) + 
+  geom_bar(position = "dodge") +
+  labs(title = "State-wise Manufacturer Distribution by Issue Consequence", x = "State", y = "Count") +
+  theme_minimal()
+
+```
+
+#Intrepretting the above graphs of EDA
+
+1. Frequency Distribution of Issue Consequences
+
+The histogram in Figure 1 illustrates the distribution of issue consequences, revealing a comparative analysis between Malfunction and Non_Malfunction categories. The frequencies are nearly identical, suggesting an equitable distribution of issue consequences within the data set.
+
+2. Scatter Plot of Product Quantity Averages
+
+Figure 2 provides a scatter plot that delineates the average product quantities associated with the two issue consequences. Despite a wide range of data points and several significant outliers, there is no discernible difference in the central tendency of product quantities between Malfunctions and Non_Malfunctions.
+
+3. Histogram of Unique Product Codes
+
+In Figure 3, the histogram presents the distribution of unique product codes from the previous year. A pronounced skew towards the lower end indicates a predominance of a smaller number of unique codes, implying a limited variety in product codes.
+
+4. Density Plot of Legal Announcing Firms
+
+The density plot in Figure 4 compares Malfunction and Non_Malfunction issues in the context of legal announcing firms. Both categories exhibit a peak at approximately one firm, suggesting most issues are announced by a single legal firm, with no significant variance between the two categories.
+
+5. Scatter Plot of Maximum vs. Average Quantities
+
+Figure 5's scatter plot explores the relationship between the maximum and average quantities of products. It demonstrates a general positive correlation in both issue consequences, with some notable outliers suggesting occasional extreme quantities.
+
+6. Brand Name Frequency Distribution
+
+The bar chart in Figure 6 contrasts the frequency of brand names within the two issue consequences. While the x-axis brand names are undisclosed, the frequencies indicate a comparative analysis of issue prevalence across various brands.
+
+7. Time Series of Legal Announcements
+
+Figure 7 presents a time series plot showing the trend of legal announcements over time, categorized by issue consequence. The temporal aspect of the data displays fluctuating frequencies of legal announcements, offering insights into the periodicity and prevalence of issues over time.
+
+8. State-wise Manufacturer Distribution
+
+The bar chart in Figure 8 exhibits the distribution of manufacturers by state, differentiating between Malfunction and Non_Malfunction issues. A notable disparity in one state suggests a potential geographical influence on issue consequences.
+
+9. Frequency of Reporter Job Codes
+
+Lastly, Figure 9's bar chart displays reporter job codes' frequency by issue consequence. The graph reveals a singular job code with a markedly higher frequency in the Malfunction category, indicating a specific role's significant involvement in reporting malfunctions.
+
+##3.0 Model building 
+This section transitions from initial data analysis to building models, using the insights obtained to improve prediction accuracy. By adjusting the data through feature engineering, it's prepared for modeling activities. The process begins with using Lasso Regression to select features, then moves on to creating and testing Logistic Regression and KNN models. Each model is trained and evaluated on different subsets of the data, allowing for a thorough comparison of how well they predict across different sets of features.
+## 3.1 Creating subset
+The dataset is partitioned into three equidistant subsets based on the amount of rows to optimise model training and evaluation. The dataset consists of 566,760 observations.
+
+1) Subset1 encompasses rows from 1 to 188,920.
+2) Subset2 spans rows from 188,921 to 377,840.
+3) Subset3 encompasses rows from 377,841 to 566,760.
+
+This segmentation technique guarantees equitable representation across subsets while enabling a thorough evaluation of model performance across various areas of the dataset.
+
+```{r Subset_generation}
+subset_1 <- data[0:188920,]
+subset_2 <- data[188921:377840,]
+subset_3 <- data[377841:566760,]
+```
+
+\subsection{3.1 Feature Engineering}
+## 3.2 Converting the data type from character to factor.
+```{r character data type to factor}
+data <- data %>% mutate_if(sapply(data, is.character), as.factor)
+```
+
+\subsection{3.2 train-test-split}
+## 3.3 Spliting the dataset into train-test-split for all the three subsets.
+```{r train-test-split for the subsets}
+
+subset1_sets <- split_fun(sub = subset_1)
+subset2_sets <- split_fun(sub = subset_2)
+subset3_sets <- split_fun(sub = subset_3)
+
+```
+
+## 3.4 Lasso Regression
+Lasso regression, also known as Least Absolute Shrinkage and Selection Operator regression, is an advanced regression methodology that specifically tackles the problems of overfitting and optimism bias commonly encountered in traditional regression methods. The Lasso method effectively decreases the complexity of the model by applying a constraint that pulls regression coefficients towards zero, so discarding unimportant variables. The method's utilisation of an automated k-fold cross-validation procedure to choose the most suitable shrinkage parameter (λ) additionally improves its predicted precision and ability to be applied to new data. Lasso regression enhances model prediction by prioritising the reduction of prediction errors. However, this comes at the expense of sacrificing the exact interpretability of individual regression coefficients in favour of achieving greater overall predictive performance. Due to the presence of a high number of predictors compared to observations, fields like genetics find this tool to be highly beneficial. However, it is important to note that the interpretability of coefficients as independent risk factors may be limited (Ranstam & Cook, 2018). 
+
+Given our dataset's substantial size, encompassing approximately 5 million observations and 76 variables, we will implement Lasso regression. This approach is particularly suited to managing datasets of this scale and complexity, efficiently identifying the most relevant variables while addressing potential overfitting issues.
+
+### 3.4.1 Running Lasso on subset-1.
+```{r Running the lasso model on subset - 1}
+lasso_subset1 <- lasso_function(x_train = subset1_sets$X_train, y_train = subset1_sets$y_train, x_test = subset1_sets$x_test,
+                       y_test =subset1_sets$y_test,subsets = subset_1)
+
+```
+
+# Interpretation of the lasso on subset -1
+The output of Lasso regression demonstrates how the model reacts to different levels of regularisation, which is determined by the lambda parameter. The plot of binomial deviance against log(lambda) helps identify the lambda value that optimises the trade-off between model complexity and performance. As the value of lambda increases, the logarithm of lambda also increases, leading to a decrease in the complexity of the model. This is achieved by penalising and reducing the coefficients towards zero, which helps to prevent overfitting.
+
+The shown coefficient routes demonstrate how the model conducts feature selection by considering both the L1 norm and log(lambda). When examining the L1 norm plots, we can see that the coefficients are pushed towards zero as the penalty grows. The sparsity of Lasso regression is a notable characteristic that highlights the algorithm's ability to do feature selection and regularisation, hence improving the interpretability of the model.
+
+The charts together assist in the selection of lambda and emphasise the predictors that have the biggest influence. The Lasso regression demonstrates its capacity to exclude extraneous features, resulting in a simplified model that maintains its prediction accuracy. This is crucial in building a concise model that effectively applies to unfamiliar data.
+
+
+### 3.4.2 Running Lasso on Subset-2.
+```{r  Running the lasso model on subset - 2}
+lasso_subset2 <- lasso_function(x_train = subset2_sets$X_train, y_train = subset2_sets$y_train, x_test = subset2_sets$x_test,
+                       y_test =subset2_sets$y_test,subsets = subset_2)
+
+```
+# Interpretation of the lasso on subset -2
+The output of Lasso regression for subset two exhibits a distinct pattern of variable selection and adjustment for model complexity. The graph in the top left corner displays the relationship between binomial deviation and log(λ). It shows the value of lambda that minimises deviance, which represents the point where the model achieves the best trade-off between fit and complexity. As we progress in the positive direction along the x-axis, which represents increasing log(λ) values, there is a significant rise in deviation. This indicates a tendency towards excessive regularisation and a probable lack of fit.
+
+In the upper right and lower figures, which depict the relationship between coefficients and the L1 norm and log(λ) respectively, we can observe the point at which coefficients gradually decrease towards zero. The effect highlights Lasso's natural capability to select only the most important predictors, hence improving the simplicity and interpretability of the model. The significant decrease in coefficient values as the logarithm of λ grows supports the notion of the model's reduced complexity. The coefficient routes help to identify influential features, as the presence of non-zero coefficients indicates their relevance in the predictive model.
+
+
+### 3.4.3 Running Lasso on Subset-3.
+```{r  Running the lasso model on subset - 3}
+lasso_subset3 <- lasso_function(x_train = subset3_sets$X_train, y_train = subset3_sets$y_train, x_test = subset3_sets$x_test,
+                       y_test =subset3_sets$y_test,subsets = subset_3)
+
+```
+
+# Interpretation of the lasso on subset -3
+The provided plots depict the results of a Lasso regression analysis, a technique used for variable selection and regularization in linear models. The binomial deviance plot illustrates the relationship between the model's performance, measured by deviance, and the logarithm of the penalty term (lambda). It demonstrates that increasing the penalty beyond a certain point significantly deteriorates model fit. The coefficient paths plots reveal the trajectories of each predictor's coefficient as the penalty strength varies. As lambda increases, coefficients shrink towards zero, with some becoming exactly zero, indicating variable selection. These plots collectively showcase Lasso's ability to induce sparsity in the model by shrinking less important coefficients, thus yielding a more interpretable and parsimonious model while retaining predictive accuracy.
+
+## 3.5 Analysing the Top10 variables for each subsets.
+After conducting Lasso Regression, we have found the top 10 columns that have the greatest impact on the target variable. We will concentrate on these variables to construct the Logistic Regression model. The objective of this focused strategy is to decrease the intricacy of the model and improve its forecast precision by utilising the most crucial characteristics. It guarantees that our Logistic Regression model is precisely adjusted to represent the fundamental connections between the predictors and the target variable, potentially enhancing both performance and interpretability.
+
+```{r List of TOP-10 variables for each subsets}
+# Top 10 subset - 1
+lasso_subset1$top10
+
+# Top 10 subset - 2
+lasso_subset2$top10
+
+# Top 10 subset - 3
+lasso_subset3$top10
+
+
+```
+For each subset, the predictors used are listed as follows:
+
+Subset 1:
+- last_two_years_legal_announcementing_firm_num_uniq
+- type_of_report.1
+- product.product_operator
+- last_two_years_root_cause_description_most_freq
+- source_type
+- reporter_job_code
+- product.manufacturer_country
+- product.issue.type
+- last_year_company_name_most_freq
+- date_event
+
+Subset 2:
+- last_two_years_legal_announcementing_firm_num_uniq
+- type_of_report.1
+- product.product_operator
+- source_type
+- last_two_years_root_cause_description_most_freq
+- product.manufacturer_country
+- reporter_job_code
+- product.issue.type
+- last_year_company_name_most_freq
+- date_event
+
+Subset 3:
+- type_of_report.1
+- last_four_years_company_name_num_uniq
+- product.manufacturer_country
+- source_type
+- product.issue.type
+- date_event
+- last_year_legal_announcementing_firm_most_freq
+- product.generic_name
+- last_four_years_brand_name_most_freq
+- product.brand_name
+
+## 3.6 Formula for subsets
+The variables "formula_subset_1", "formula_subset_2", and "formula_subset_3" have been created to streamline model execution on each subset, ensuring efficiency and organization in the modeling workflow.
+```{r Formulas of each subset}
+# formula for subset -1
+formula_subset_1 <- Issue_Consequence_new ~ last_two_years_legal_announcementing_firm_num_uniq + type_of_report.1	+ product.product_operator + last_two_years_root_cause_description_most_freq	+ source_type + reporter_job_code + product.manufacturer_country	+ product.issue.type + last_year_company_name_most_freq + 	date_event	
+
+#formula for subset - 2
+formula_subset_2 <- Issue_Consequence_new ~ last_two_years_legal_announcementing_firm_num_uniq +type_of_report.1 + product.product_operator + source_type + last_two_years_root_cause_description_most_freq + product.manufacturer_country + reporter_job_code + product.issue.type + last_year_company_name_most_freq + date_event
+
+#formula for subset - 3
+formula_subset_3 <- Issue_Consequence_new ~ type_of_report.1 +last_four_years_company_name_num_uniq + product.manufacturer_country	  + source_type + product.issue.type + date_event + last_year_legal_announcementing_firm_most_freq + product.generic_name + last_four_years_brand_name_most_freq + product.brand_name
+```
+
+\subsection{3.7 Logistic Regression Model}
+
+## 3.7 Logistic Regression Model
+Logistic regression is a statistical analysis method used to model a binary outcome with two possible values, such as "yes" or "no", "success" or "failure". Unlike linear regression, which may produce unsatisfactory predictions beyond the binary outcome boundaries, logistic regression predicts the log-odds of the occurrence of an event and is thus aptly suited for binary outcome modeling (LaValley, 2008). Its fundamental significance lies in its ability to handle both continuous and categorical predictors while adjusting for multiple confounding variables, making it particularly useful for observational studies where controlling for confounders is critical (LaValley, 2008). Additionally, logistic regression results are commonly expressed in terms of odds ratios, providing an estimate of the change in odds for the event of interest with a one-unit change in the predictor variable, though it's crucial to distinguish odds ratios from relative risk to avoid exaggerations of effect sizes (LaValley, 2008). Overall, logistic regression is indispensable for the analysis of clinical and epidemiological data, offering a robust method for risk factor identification and decision-making in health research (LaValley, 2008).  
+
+### 3.7.1 Running the Logistic Regression for subset - 1
+```{r logistic Regression on subset - 1}
+logistic_Regression_subset_1 <- logistic_Regression(formula = formula_subset_1 ,  train = subset1_sets$train , test = subset1_sets$test, y_test = subset1_sets$y_test)
+```
+#Interpretation of logistic regression on subset 1
+The logistic regression model tailored specifically for subset one, the model's performance is encouraging, achieving an accuracy of 64.94%. The analysis reveals the model's aptitude in making reliable predictions, as evidenced by the true positives in the confusion matrix. Additionally, the ROC curve demonstrates a robust AUC of 0.652, signifying the model's solid discriminative power between the classes. These outcomes affirm the model's effectiveness and underscore its value in accurately predicting outcomes for this particular subset of data.
+### 3.7.2 Running the logistic Regression on subset - 2
+```{r logistic Regression on subset - 2}
+logistic_Regression_subset_2 <- logistic_Regression(formula = formula_subset_2,
+train = subset2_sets$train , test = subset2_sets$test, y_test = subset2_sets$y_test)
+```
+#Interpretation of logistic regression on subset 2
+The logistic regression model created for subset two has shown a commendable accuracy of 64.9577%. The provided confusion matrix illustrates the model’s adeptness at successfully classifying class '1' instances, which is a testament to its capability in correctly identifying true positive outcomes. Additionally, the ROC curve further corroborates the model’s efficacy with an AUC of 0.655, signifying its substantial ability to differentiate between the classes effectively. These results underscore the tailored precision of the logistic regression model for subset two, reflecting its practical application in predicting the correct class labels within this specific data set.
+
+### 3.7.3 Running the logistic Regression on subset - 3
+```{r logistic Regression on subset - 3}
+logistic_Regression_subset_3 <- logistic_Regression(formula = formula_subset_3, train = subset3_sets$train , test = subset3_sets$test, y_test = subset3_sets$y_test)
+```
+#Interpretation of logistic regression on subset 3
+The analysis of subset three utilizing logistic regression reveals an accuracy of 63.52424%. This demonstrates a substantial ability of the model to predict outcomes accurately within this specific subset. The confusion matrix again predominantly shows true positives, indicating a strong performance of the model in correctly classifying instances of class '1'. The ROC curve exhibits an AUC of 0.638, which signifies that the model has a considerable discriminative capacity for distinguishing between the two classes. This positive outcome emphasizes the model's reliable prediction quality for the data in subset three.
+
+### 3.7.4 Comparing the Results for Logistics Regression
+```{r Logistic Regression results }
+# Assigning the accuracy values to variables
+lr1 <- logistic_Regression_subset_1$acc_lr
+lr2 <- logistic_Regression_subset_2$acc_lr
+lr3 <- logistic_Regression_subset_3$acc_lr
+
+results_visual(c(lr1, lr2, lr3))
+
+
+```
+Upon analysis of the logistic regression model's performance across three distinct data subsets, we observe a high degree of consistency in accuracy. For subset one, the model demonstrates a 65% accuracy rate, which establishes a strong baseline for comparison. Subset two exhibits an identical accuracy, also at 65%, underscoring the model's reliability. Meanwhile, subset three slightly trails with a 64% accuracy rate, a negligible decrease that nonetheless maintains proximity to the mean accuracy of 64%.
+
+This aggregated data indicates a remarkably stable performance of the logistic regression model, with subset one and two surpassing the mean and subset three aligning closely. The model's steadfast accuracy across varying data subsets is commendable and suggests that the model is well-tuned to the underlying patterns within the data. Moreover, the slight variance observed in subset three's results does not significantly detract from the model's overall effectiveness. These findings point to the logistic regression model as a reliable tool for predictive analytics within the tested data scope.
+
+### 4.0 Logistic Regression - kfold
+In their empirical study, Nti, Nyarko-Boateng, and Aning (2021) scrutinize the impact of varying k values on k-fold cross-validation for logistic regression and other algorithms.Logistic regression exhibits consistent accuracy across different k values, highlighting its robustness within cross-validation procedures. This insight advocates for machine learning practitioners to calibrate k-fold cross-validation k values to optimize their models' performance effectively (Nti, Nyarko-Boateng & Aning, 2021).
+
+#### 4.1.1 subset - 1
+```{r k-fold lr subset - 1}
+kfold_lr_results_subset1 <- kfold_lr(data = data, formula = formula_subset_1)
+kfold_lr_results_subset1
+```
+When assessing the logistic regression model using k-fold cross-validation on subset one, the accuracy achieved was 63.72%. This indicates that the model accurately predicted outcomes with a fair level of frequency. The Kappa statistic of 0.28 indicates a satisfactory level of agreement that goes beyond random chance, highlighting the model's consistent predicting ability. The standard deviations for accuracy and Kappa were remarkably low, measuring 0.0019 and 0.0038, respectively. This demonstrates the model's consistent performance across various data segments. These metrics indicate that the logistic regression model has a reliable predictive capacity, with a modest level of accuracy and a fair level of reliability in its predictions.
+
+
+#### 4.1.2 subset - 2
+```{r k-fold lr subset - 2}
+kfold_lr_results_subset2 <- kfold_lr(data = data, formula = formula_subset_2)
+kfold_lr_results_subset2
+```
+The k-fold cross-validation results for logistic regression on subset two show a precision rate of 63.70%. The Kappa statistic, which is around 0.28, indicates that the model's predictive ability is moderately better than random chance. The accuracy's standard deviation, which is 0.0026, indicates that the model's performance is consistent across the folds, demonstrating a low level of variability and a reliable prediction capability. Furthermore, the Kappa standard deviation of 0.0049 is indicative of the model's high reliability. The results indicate that the logistic regression model demonstrates a consistent and relatively successful performance for subset two.
+
+
+#### 4.1.3 subset - 3
+```{r k-fold lr subset - 3}
+kfold_lr_results_subset3 <- kfold_lr(data = data, formula = formula_subset_3)
+kfold_lr_results_subset3
+```
+The k-fold cross-validation for logistic regression on subset three yields an accuracy rate of 63.26%. The Kappa statistic of the model is 0.27, which, like subset two, suggests a reasonable level of agreement beyond what would be expected by chance. The standard deviation of the accuracy is 0.0016, indicating that the model's predictive performance remains consistent across various data partitions. The Kappa standard deviation of 0.0031 provides further evidence of the model's stability in terms of agreement. The results confirm that the logistic regression model for subset three offers a dependable level of prediction with a reasonable level of agreement across the folds.
+
+
+#### 4.1.4 K-flod result comparsion 
+```{r k-fold logistic Regression results comparison}
+
+kflr1 <- kfold_lr_results_subset1$Accuracy
+kflr2 <- kfold_lr_results_subset2$Accuracy
+kflr3 <- kfold_lr_results_subset3$Accuracy
+
+results_visual(c(kflr1, kflr2, kflr3))
+
+
+```
+The visual comparison of logistic regression models applied to three data subsets using k-fold cross-validation shows highly similar results. Subset one and two have a congruent accuracy rate of 64%, indicating that the models work equally proficiently on these portions of the data. Subset three demonstrates a significantly diminished accuracy rate of 63%, which, although slightly lower, is closely aligned with the performance of the other subsets.
+
+The consistent accuracy level, with a narrow range of one percentage point, indicates that the logistic regression method maintains a stable predictive performance across various subsets of the data. The dotted line, positioned at 64%, serves as confirmation that all subsets exhibit performance levels close to this central value. The model's predictive performance is demonstrated by its consistent results across different data segments, indicating its reliability and robustness.
+
+
+\section{5.0  Conclusion}
+# 5.0 Conclusion
+The thorough examination utilising Lasso and Logistic Regression models on three subsets of a dataset revealed the efficacy of these approaches in predicting "Issue Consequence." The contribution of Lasso Regression was crucial in selecting features, identifying important predictors that improved the simplicity and accuracy of the model. The logistic regression models demonstrated remarkable stability and dependability across all subsets, with minor fluctuations in accuracy, showcasing their robustness in predicting binary outcomes. K-fold cross-validation confirmed the models' constant performance, highlighting the models' usefulness in diverse data settings.
+
+This work highlights the significance of using Lasso regression for focused feature selection and confirms the suitability of logistic regression for similar binary classification problems. Although the model's performance exhibited slight variations, it emphasised the potential for further enhancement and investigation of various modelling methods to enhance predictions. The analysis, based on the CRISP-DM framework, demonstrates a systematic approach to predictive modelling, providing significant insights for making decisions based on data. The results support the use of logistic regression combined with strategic feature selection as a dependable framework for predictive analytics. This has implications for improving decision-making in related fields.
+
+\section{6.0 References}
+# 6.0 References
+1. Huber, S., Wiemer, H., Schneider, D., & Ihlenfeldt, S. (2019). DMME: Data mining methodology for engineering applications – a holistic extension to the CRISP-DM model. Procedia CIRP, 79, 403–408. https://doi.org/10.1016/j.procir.2019.02.106
+
+2. LaValley, M. P. (2008). Logistic regression. Circulation, 117(19), 2395-2399. DOI: 10.1161/CIRCULATIONAHA.106.682658
+
+3. Nti, I. K., Nyarko-Boateng, O., & Aning, J. (2021). Performance of Machine Learning Algorithms with Different K Values in K-fold Cross-Validation. International Journal of Information Technology and Computer Science, 13(6), 61-71. DOI: 10.5815/ijitcs.2021.06.05
+
+4. Ranstam, J., & Cook, J. A. (2018). LASSO regression. BJS (British Journal of Surgery), 105(10), 1348. DOI: 10.1002/bjs.10895
+
+5. Schröer, C., Kruse, F. and Gómez, J.M. (2021) ‘A systematic literature review on applying CRISP-DM process model’, Procedia Computer Science, 181, pp. 526–534. doi: Available at: https://www.sciencedirect.com/science/article/pii/S1877050921002416 [Accessed on: 8th November 2023].
+
+6. Zhang, H. et al. (2020) 'Feature selection for neural networks using group lasso regularization,' IEEE Transactions on Knowledge and Data Engineering, 32(4), pp. 659–673. https://doi.org/10.1109/tkde.2019.2893266.
